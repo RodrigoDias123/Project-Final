@@ -527,15 +527,108 @@ O breakdown deve conter todas as informações necessárias para o cliente enten
 A implementação deve garantir que as regras sejam aplicadas na ordem correta e que os descontos não excedam o subtotal, resultando em um preço final justo e transparente para o cliente.*/
 class MotorDePrecos {
 	constructor({ catalogo }) {
-		this.catalogo = catalogo;
-		
+        this.catalogo = catalogo;
+        this.FRETE_PADRAO = 20.00;
 	}
 
 
 	calcular({ cliente, itens, cupomCodigo }) {
+		if (itens.length === 0) throw new Error("Carrinho vazio.");
+
+        let subtotal = 0;
+        const listaDescontos = [];
+        const itensExpandidos = []; // Para a regra Leve 3 Pague 2
+
+        // 1. Cálculo do Subtotal e Expansão de itens
+        itens.forEach(item => {
+            subtotal += item.getTotal();
+            // uma lista "unitária" para facilitar o R3
+            for (let i = 0; i < item.quantidade; i++) {
+                const p = this.catalogo.getProduto(item.sku);
+                itensExpandidos.push({ sku: item.sku, preco: item.precoUnitario, categoria: p.categoria });
+            }
+        });
+
+        let totalDescontos = 0;
+        let frete = this.FRETE_PADRAO;
+
+        // --- R2: Validação inicial do Cupom ---
+        const cuponsValidos = ["ETIC10", "FRETEGRATIS", "SEM-VIP"];
+        if (cupomCodigo && !cuponsValidos.includes(cupomCodigo)) {
+            throw new Error(`Cupom inválido: ${cupomCodigo}`);
+        }
+
+        // --- R3: Leve 3 Pague 2 (Vestuário) ---
+        const vestuario = itensExpandidos
+            .filter(i => i.categoria === "vestuário")
+            .sort((a, b) => a.preco - b.preco); // Do mais barato ao mais caro
+
+        const unidadesGratis = Math.floor(vestuario.length / 3);
+        if (unidadesGratis > 0) {
+            let valorR3 = 0;
+            for (let i = 0; i < unidadesGratis; i++) {
+                valorR3 += vestuario[i].preco;
+            }
+            listaDescontos.push({ codigo: "L3P2", descricao: "Leve 3 Pague 2 (Vestuário)", valor: round2(valorR3) });
+            totalDescontos += valorR3;
+        }
+
+        // --- R1: Desconto VIP ---
+        const permiteVIP = cupomCodigo !== "SEM-VIP";
+        if (cliente.tipo === "VIP" && permiteVIP) {
+            const valorVIP = (subtotal - totalDescontos) * 0.05;
+            listaDescontos.push({ codigo: "VIP5", descricao: "Desconto Cliente VIP", valor: round2(valorVIP) });
+            totalDescontos += valorVIP;
+        }
+
+        // --- R2: Aplicação de Efeitos do Cupom ---
+        if (cupomCodigo === "ETIC10") {
+            const valorEtic = (subtotal - totalDescontos) * 0.10;
+            listaDescontos.push({ codigo: "ETIC10", descricao: "Cupom 10% OFF", valor: round2(valorEtic) });
+            totalDescontos += valorEtic;
+        } else if (cupomCodigo === "FRETEGRATIS") {
+            frete = 0;
+            listaDescontos.push({ codigo: "FRETEGRATIS", descricao: "Frete Grátis", valor: 0 });
+        }
+
+        // --- R4: Desconto por valor fixo ---
+        const subtotalAposPercentuais = subtotal - totalDescontos;
+        if (subtotalAposPercentuais >= 500) {
+            const valorFixo = 30;
+            listaDescontos.push({ codigo: "FIXO30", descricao: "Desconto Compra > 500", valor: valorFixo });
+            totalDescontos += valorFixo;
+        }
+
+        // --- Impostos e Finalização ---
+        totalDescontos = Math.min(totalDescontos, subtotal);
+        const baseImposto = subtotal - totalDescontos;
+
+        let totalImpostos = 0;
+        const impostoPorCategoria = {};
+
+        itens.forEach(item => {
+            const p = this.catalogo.getProduto(item.sku);
+            const taxa = IVA_POR_CATEGORIA[p.categoria] || 0;
+            const proporcaoNoTotal = item.getTotal() / subtotal;
+            const impostoItem = (baseImposto * proporcaoNoTotal) * taxa;
+            
+            impostoPorCategoria[p.categoria] = round2((impostoPorCategoria[p.categoria] || 0) + impostoItem);
+            totalImpostos += impostoItem;
+        });
+
+        return {
+            subtotal: round2(subtotal),
+            descontos: listaDescontos,
+            totalDescontos: round2(totalDescontos),
+            baseImposto: round2(baseImposto),
+            impostoPorCategoria,
+            totalImpostos: round2(totalImpostos),
+            frete: round2(frete),
+            total: round2(baseImposto + totalImpostos + frete)
+        };
+    }
 		
-		
-	}
+	
 }
 
 // ==========================================
